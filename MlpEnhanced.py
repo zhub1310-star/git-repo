@@ -699,7 +699,7 @@ if __name__ == "__main__":
     file_path = r"D:\\AI_Prediction\\AiCode\\Data\\562-0435.txt"
     config_path = r"D:\\AI_Prediction\\AiCode\\PyTorch\\ModelsConfig.json"
     identifier = "562-0435"
-    cfgmode = "AI_EML_2T"
+    cfgmode = "AI_EML"
 
     X_train, X_val, X_test, y_train, y_val, y_test, scaler_X, scaler_y = \
         load_and_preprocess_data(file_path, identifier, config_path, cfgmode)
