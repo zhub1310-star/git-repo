@@ -95,15 +95,17 @@ def main(config, log_callback=None, progress_callback=None, stop_event=None):
         return True
 
     def flush_sn_cache():
-        """将 SN_DATA_CACHE 写出成 TXT（按原逻辑），然后清空缓存"""
+        """将 SN_DATA_CACHE 写出成 TXT（自动按第一个 SN 的 item 顺序建立列头）"""
         if not SN_DATA_CACHE:
             return
+
         # try to get time suffix
         last_time = SN_CACHE[-1][1] if SN_CACHE else None
         try:
             time_part = datetime.strptime(last_time, "%Y-%m-%d %H:%M:%S").strftime("%Y%m%d_%H%M%S") if last_time else datetime.now().strftime("%Y%m%d_%H%M%S")
         except Exception:
             time_part = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         txt_file = os.path.join(OUTPUT_DIR, f"SN_PN_DATA_{time_part}.txt")
 
         # collect all temperature numeric values
@@ -127,13 +129,37 @@ def main(config, log_callback=None, progress_callback=None, stop_event=None):
             temp_label_map[sorted_temps[1]] = "RT"
             temp_label_map[sorted_temps[2]] = "HT"
 
+        # ✅ 自动推断字段顺序（以第一个 SN 的 XML 实际字段为准）
+        ordered_target_items = []
+        try:
+            first_entry = SN_DATA_CACHE[0]
+            for bitrate_data in first_entry["Data"].values():
+                for temp_info in bitrate_data["temps"].values():
+                    for ch_data in temp_info["dut_channels"].values():
+                        ordered_target_items = list(ch_data["items"].keys())
+                        break
+                    if ordered_target_items:
+                        break
+                if ordered_target_items:
+                    break
+        except Exception:
+            pass
+
+        # 如果没有推断到，就 fallback
+        if not ordered_target_items:
+            ordered_target_items = list(TARGET_ITEM_NAMES) if TARGET_ITEM_NAMES else ["TempADC", "MPDADC", "BiasDAC", "PDDAC"]
+
+        # 构建 header
         header = ["SN", "EndTime", "PN", "Bitrate", "Channel"]
         for label in ["HT", "RT", "LT"]:
-            header.extend([f"{label}_Temp", f"{label}_BiasDAC", f"{label}_MPDADC", f"{label}_PDADC", f"{label}_TempADC"])
+            header.append(f"{label}_Temp")
+            for item in ordered_target_items:
+                header.append(f"{label}_{item}")
 
         try:
             with open(txt_file, "w", encoding="utf-8") as f:
                 f.write("\t".join(header) + "\n")
+
                 for entry in SN_DATA_CACHE:
                     sn = entry.get("CustomerSN", "")
                     end_time = entry.get("EndTime", "")
@@ -155,14 +181,16 @@ def main(config, log_callback=None, progress_callback=None, stop_event=None):
                                         ch_data = temp_info["dut_channels"].get(ch)
                                         if ch_data:
                                             row.append(temp_str)
-                                            for item in TARGET_ITEM_NAMES:
-                                                row.append(ch_data["items"].get(item, [""])[0])
+                                            for item in ordered_target_items:
+                                                val_list = ch_data["items"].get(item, [""])
+                                                row.append(val_list[0] if val_list else "")
                                             found = True
                                             break
                                 if not found:
-                                    row.extend(["" for _ in range(1 + len(TARGET_ITEM_NAMES))])
+                                    row.extend(["" for _ in range(1 + len(ordered_target_items))])
                             f.write("\t".join(row) + "\n")
-            log(f"完成 TXT 输出：{txt_file}")
+
+            log(f"✅ 完成 TXT 输出（按第一个 SN 字段顺序）：{txt_file}")
         except Exception as e:
             log(f"写 TXT 失败: {e}", "ERROR")
         finally:
@@ -480,8 +508,98 @@ def main(config, log_callback=None, progress_callback=None, stop_event=None):
         # 下一天
         current_date += timedelta(days=1)
 
+    def merge_txt_and_ttr():
+        """读取TXT与TTR结果，合并相同SN的通道数据"""
+        try:
+            import glob
+            txt_files = sorted(glob.glob(os.path.join(OUTPUT_DIR, "SN_PN_DATA_*.txt")), reverse=True)
+            if not txt_files:
+                log("未找到 SN_PN_DATA_*.txt 文件，跳过合并", "WARN")
+                return
+            txt_file = txt_files[0]
+            ttr_file = os.path.join(OUTPUT_DIR, "TTR_All_Interp.csv")
+            if not os.path.exists(ttr_file):
+                log("未找到 TTR_All_Interp.csv 文件，跳过合并", "WARN")
+                return
+
+            log(f"🔍 开始合并 TXT 与 TTR 文件: {os.path.basename(txt_file)} + {os.path.basename(ttr_file)}")
+
+            # 读取 TXT
+            df_txt = pd.read_csv(txt_file, sep="\t", encoding="utf-8", dtype=str, engine="python")
+            df_ttr = pd.read_csv(ttr_file, encoding="utf-8", dtype=str)
+
+            # 清理 SN
+            df_txt["SN"] = df_txt["SN"].astype(str).str.strip()
+            df_ttr["SN"] = df_ttr["SN"].astype(str).str.strip()
+
+            # 统一 Channel 格式
+            def normalize_channel(ch):
+                if pd.isna(ch):
+                    return ""
+                ch = str(ch).strip().upper()
+                if ch.startswith("CH"):
+                    return ch
+                elif ch.isdigit():
+                    return f"CH{int(ch)}"
+                else:
+                    return ch
+
+            df_txt["Channel"] = df_txt["Channel"].apply(normalize_channel)
+            df_ttr["Channel"] = df_ttr["Channel"].apply(normalize_channel)
+
+            # 求 SN 交集
+            common_sns = set(df_txt["SN"]) & set(df_ttr["SN"])
+            if not common_sns:
+                log("TXT 与 TTR 中无交集 SN，跳过合并", "WARN")
+                return
+
+            df_txt_common = df_txt[df_txt["SN"].isin(common_sns)].copy()
+            df_ttr_common = df_ttr[df_ttr["SN"].isin(common_sns)].copy()
+
+            # 执行合并
+            df_merged = pd.merge(
+                df_txt_common,
+                df_ttr_common,
+                how="inner",
+                on=["SN", "Channel"],
+                suffixes=("_TXT", "_TTR")
+            )
+
+            if df_merged.empty:
+                log("⚠️ 合并后为空，可能是 Channel 名称不匹配，请检查 TXT 与 TTR 文件中的通道列格式。", "WARN")
+            else:
+                # 排序输出
+                df_merged = df_merged.sort_values(by=["SN", "Channel"])
+                merged_path = os.path.join(OUTPUT_DIR, f"{list(TARGET_PN500)[0]}.txt" or "Merged_SN_All_PN500.csv")
+                df_merged.to_csv(merged_path, sep="\t", index=False, encoding="utf-8-sig")
+                log(f"✅ 已输出合并结果：{merged_path}（共 {len(df_merged)} 行）")
+            # 清理中间文件
+            try:
+                # 删除中间 TXT
+                txt_files = glob.glob(os.path.join(OUTPUT_DIR, "SN_PN_DATA_*.txt"))
+                for file in txt_files:
+                    if os.path.abspath(file) != os.path.abspath(merged_path):
+                        os.remove(file)
+
+                # 删除 CSV 中间结果
+                csv_files = [
+                    os.path.join(OUTPUT_DIR, "XML_All_SN_Data.csv"),
+                    os.path.join(OUTPUT_DIR, "TTR_All_Interp.csv"),
+                ]
+                for file in csv_files:
+                    if os.path.exists(file):
+                        os.remove(file)
+
+                log("🧹 已清理中间文件（SN_PN_DATA_*.txt, XML_All_SN_Data.csv, TTR_All_Interp.csv）")
+            except Exception as e:
+                log(f"⚠️ 清理旧文件时出错: {e}", "WARN")
+        except Exception as e:
+            log(f"❌ 合并 TXT 与 TTR 失败: {e}", "ERROR")
+
     # flush 剩余缓存
     if SN_DATA_CACHE:
         flush_sn_cache()
-    log("处理完成。", "INFO")
 
+    merge_txt_and_ttr()
+    
+    log("处理完成。", "INFO")
