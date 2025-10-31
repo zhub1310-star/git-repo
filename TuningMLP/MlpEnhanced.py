@@ -707,7 +707,7 @@ if __name__ == "__main__":
     train_with_self_distillation(
         X_train, y_train, X_val, y_val, X_test, y_test,
         scaler_X, scaler_y,
-        model_dir=f"./output/{identifier}",
+        model_dir=f"D:/AI_Prediction/AiCode/ModelStorage/{identifier}",
         identifier=identifier,
         distill_alpha_init=0.9,
         distill_alpha_final=0.3,

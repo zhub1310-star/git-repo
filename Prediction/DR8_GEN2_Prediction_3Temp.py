@@ -122,16 +122,16 @@ if ModelType == "Msft":
             HighBias[i] = int(HighBias[i] + 153)
             HighBias[j] = int(HighBias[j] + 153)
 
-    results = np.column_stack(
-        [HighBias, HighRatio, HighTempAdc, NormalBias, NormalRatio, NormalTempAdc, LowBias, LowRatio, LowTempAdc])
+results = np.column_stack(
+    [HighBias, HighRatio, HighTempAdc, NormalBias, NormalRatio, NormalTempAdc, LowBias, LowRatio, LowTempAdc])
 
-    bias_cols = [0, 3, 6]  # HighBias, NormalBias, LowBias
+bias_cols = [0, 3, 6]  # HighBias, NormalBias, LowBias
     # 偏置和PD列做平均（按配对）
-    pairs = [(0, 1), (2, 3), (4, 5), (6, 7)]  # 按行配对
-    for col_idx in bias_cols:  # 遍历偏置列
-        for i, j in pairs:
-            avg = int(np.mean([results[i, col_idx], results[j, col_idx]]))
-            results[i, col_idx] = results[j, col_idx] = avg
+pairs = [(0, 1), (2, 3), (4, 5), (6, 7)]  # 按行配对
+for col_idx in bias_cols:  # 遍历偏置列
+    for i, j in pairs:
+        avg = int(np.mean([results[i, col_idx], results[j, col_idx]]))
+        results[i, col_idx] = results[j, col_idx] = avg
 
 # ========= 保存结果 =========
 output_file = os.path.join(out_predict_path, "Predictions.txt")
