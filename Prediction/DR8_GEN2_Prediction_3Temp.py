@@ -109,8 +109,8 @@ if ModelType == "Msft":
     HighTempAdc[:] = int(np.mean(HighTempAdc))
     NormalTempAdc[:] = int(np.mean(NormalTempAdc))
     LowTempAdc[:] = int(np.mean(LowTempAdc))
-    HighRatio[2:] += 0.03
-    LowRatio[2:] += 0.03
+    for arr in (HighRatio, LowRatio):
+        arr[[0, *range(2, len(arr))]] += 0.03
     NormalRatio += 0.03
 
     pairs = [(0, 1), (2, 3), (4, 5), (6, 7)]
@@ -121,6 +121,11 @@ if ModelType == "Msft":
         if avg_power < 4.5:
             HighBias[i] = int(HighBias[i] + 153)
             HighBias[j] = int(HighBias[j] + 153)
+
+if ModelType == "NV":
+    HighTempAdc[:] = int(np.mean(HighTempAdc))
+    NormalTempAdc[:] = int(np.mean(NormalTempAdc))
+    LowTempAdc[:] = int(np.mean(LowTempAdc))
 
 results = np.column_stack(
     [HighBias, HighRatio, HighTempAdc, NormalBias, NormalRatio, NormalTempAdc, LowBias, LowRatio, LowTempAdc])
